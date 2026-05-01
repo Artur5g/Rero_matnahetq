@@ -19,9 +19,38 @@ time.sleep(2)
 ser.reset_input_buffer()
 # serial = i2c(port=1, address=0x3C)
 # device = ssd1306(serial, width=128, height=64)
-# CREDENTIALS_FILE = 'rero-462308-93702059b7a2.json'
 # font_small = ImageFont.truetype("DejaVuSans.ttf", 12)
 
+def mark_attendance(student_id):
+    current_time = datetime.datetime.now().strftime('%H:%M:%S')
+    current_date = datetime.datetime.now().strftime('%d/%m/%Y')
+
+    # 1. Проверяем, есть ли уже запись за сегодня
+    cur.execute("SELECT time_in, time_out FROM attendance WHERE student_id = %s AND date = %s", (student_id, current_date))
+    result = cur.fetchone()
+
+    if result is None:
+        # Вообще нет строки — создаем новую с временем прихода
+        query = "INSERT INTO attendance (student_id, date, time_in, status) VALUES (%s, %s, %s, 'present')"
+        cur.execute(query, (student_id, current_date, current_time))
+        print(f"Студент {student_id}: НОВАЯ ЗАПИСЬ (Приход в {current_time})")
+    
+    elif result[0] is None:
+        # Строка есть (от старого кода), но время прихода ПУСТОЕ — заполняем приход
+        query = "UPDATE attendance SET time_in = %s WHERE student_id = %s AND date = %s"
+        cur.execute(query, (current_time, student_id, current_date))
+        print(f"Студент {student_id}: ЗАПОЛНЕН ПРИХОД ({current_time})")
+        
+    elif result[1] is None:
+        # Приход уже был, а ухода нет — заполняем уход
+        query = "UPDATE attendance SET time_out = %s WHERE student_id = %s AND date = %s"
+        cur.execute(query, (current_time, student_id, current_date))
+        print(f"Студент {student_id}: ЗАПОЛНЕН УХОД ({current_time})")
+    
+    else:
+        # И приход, и уход уже стоят
+        print(f"Студент {student_id}: У этого студента уже заполнены и вход, и выход.")
+    conn.commit()
 
 def create_table(student_id):
     data = datetime.datetime.now().strftime('%d/%m/%Y')
@@ -42,36 +71,12 @@ def create_table(student_id):
     conn.commit()
 
 def detect(fid):
-            print(fid)
-            a1 = 0
-            if a1 == 0:
-                named_tuple = time.localtime() # получаем struct_time
-                time_string = time.strftime("%m/%d/%Y, %H:%M:%S", named_tuple)
-                time_minut = time.strftime("%M", named_tuple)
-                with open("file.txt", "w") as file:
-                    file.write(time_string)
-                print(time_string)
-                a1 = 1
-                print(1)
-                time.sleep(2)
-                #  workspace("2")
-                create_table(fid)
-            if a1 == 1:
-                print("if")
-                named_tuple2 = time.localtime() # получаем struct_time
-                time_string2 = time.strftime("%M", named_tuple2)
-                print(time_minut)
-                print(time_string2)                
-                if (time_string2 > time_minut):
-                    with open("file.txt", "w") as file:
-                        file.write(time_string2)
-                        print(time_string2)
-                        print("time_string2")
-                    print(2)
+    print(f"Обнаружен студент с ID: {fid}")
+    mark_attendance(fid)
 
 def students():
     """Проверяет базу на наличие новых студентов и отправляет их в Arduino"""
-    print("Проверка новых студентов...")
+    # print("Проверка новых студентов...")
     try:
         with open("last_id.txt", "r") as f:
             last_id = int(f.read().strip())
@@ -90,6 +95,7 @@ def students():
         while attempts < 5:
             ser.write(f"x{s_id}".encode("utf-8"))
             response = ser.readline().decode("utf-8").strip()
+            print(response)
             if response == str(s_id):
                 print(f"Arduino подтвердил получение ID {s_id}")
                 break
