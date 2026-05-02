@@ -2,7 +2,7 @@
 import psycopg2
 import time
 import serial
-ser = serial.Serial('COM7', 9600) 
+ser = serial.Serial('COM9', 9600) 
 time.sleep(2)
 ser.reset_input_buffer()
 global id

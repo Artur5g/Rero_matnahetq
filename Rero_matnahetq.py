@@ -13,8 +13,8 @@ conn = psycopg2.connect(
     port="5432"
 )
 cur = conn.cursor()
-
-ser = serial.Serial('COM7', 9600)  
+global id
+ser = serial.Serial('COM9', 9600)  
 time.sleep(2)
 ser.reset_input_buffer()
 # serial = i2c(port=1, address=0x3C)
@@ -40,7 +40,7 @@ def create_table(student_id):
 
     result = cur.fetchone()
     conn.commit()
-# start()
+
 def detect(fid):
             print(fid)
             a1 = 0
@@ -69,9 +69,43 @@ def detect(fid):
                         print("time_string2")
                     print(2)
 
+def students():
+    """Проверяет базу на наличие новых студентов и отправляет их в Arduino"""
+    print("Проверка новых студентов...")
+    try:
+        with open("last_id.txt", "r") as f:
+            last_id = int(f.read().strip())
+    except:
+        last_id = 0
+
+    cur.execute("SELECT id FROM students WHERE id > %s ORDER BY id ASC", (last_id,))
+    new_students = cur.fetchall()
+
+    for row in new_students:
+        s_id = row[0]
+        print(f"Регистрация нового студента ID: {s_id}")
+        
+        # Попытка отправить ID в Arduino (ждем подтверждения)
+        attempts = 0
+        while attempts < 5:
+            ser.write(f"x{s_id}".encode("utf-8"))
+            response = ser.readline().decode("utf-8").strip()
+            if response == str(s_id):
+                print(f"Arduino подтвердил получение ID {s_id}")
+                break
+            attempts += 1
+            time.sleep(1)
+
+        last_id = s_id
+        with open("last_id.txt", "w") as f:
+            f.write(str(last_id))
 
 while True:
+    students()
     ser.write(b'a')
-    dver1 = ser.readline()
-    decoded_bytes1 = (dver1[0:len(dver1)-2].decode("utf-8"))
-    detect(decoded_bytes1)
+    if ser.in_waiting > 0:
+            line = ser.readline().decode("utf-8").strip()
+            if line and line.isdigit():
+                print(f"Считан ID со сканера: {line}")
+                detect(line)
+
