@@ -14,7 +14,7 @@ conn = psycopg2.connect(
 )
 cur = conn.cursor()
 global id
-ser = serial.Serial('COM9', 9600)  
+ser = serial.Serial('COM3', 9600)  
 time.sleep(2)
 ser.reset_input_buffer()
 # serial = i2c(port=1, address=0x3C)
@@ -28,13 +28,16 @@ def mark_attendance(student_id):
     # 1. Проверяем, есть ли уже запись за сегодня
     cur.execute("SELECT time_in, time_out FROM attendance WHERE student_id = %s AND date = %s", (student_id, current_date))
     result = cur.fetchone()
-
     if result is None:
         # Вообще нет строки — создаем новую с временем прихода
-        query = "INSERT INTO attendance (student_id, date, time_in, status) VALUES (%s, %s, %s, 'present')"
-        cur.execute(query, (student_id, current_date, current_time))
-        print(f"Студент {student_id}: НОВАЯ ЗАПИСЬ (Приход в {current_time})")
-    
+        if current_time < "11:02:00":
+            query = "INSERT INTO attendance (student_id, date, time_in, status) VALUES (%s, %s, %s, 'present')"
+            cur.execute(query, (student_id, current_date, current_time))
+            print(f"Студент {student_id}: НОВАЯ ЗАПИСЬ (Приход в {current_time})")
+        if current_time > "11:05:00":
+            query = "INSERT INTO attendance (student_id, date, time_in, status) VALUES (%s, %s, %s, 'late')"
+            cur.execute(query, (student_id, current_date, current_time))
+            # print(f"Студент {student_id}: НОВАЯ ЗАПИСЬ (Приход в {current_time})")
     elif result[0] is None:
         # Строка есть (от старого кода), но время прихода ПУСТОЕ — заполняем приход
         query = "UPDATE attendance SET time_in = %s WHERE student_id = %s AND date = %s"
@@ -111,7 +114,7 @@ while True:
     ser.write(b'a')
     if ser.in_waiting > 0:
             line = ser.readline().decode("utf-8").strip()
+            print(line)
             if line and line.isdigit():
                 print(f"Считан ID со сканера: {line}")
                 detect(line)
-
