@@ -14,46 +14,56 @@ conn = psycopg2.connect(
 )
 cur = conn.cursor()
 global id
-ser = serial.Serial('COM3', 9600)  
+ser = serial.Serial('COM7', 9600)  
 time.sleep(2)
 ser.reset_input_buffer()
 # serial = i2c(port=1, address=0x3C)
 # device = ssd1306(serial, width=128, height=64)
 # font_small = ImageFont.truetype("DejaVuSans.ttf", 12)
-
+print("start")
 def mark_attendance(student_id):
-    current_time = datetime.datetime.now().strftime('%H:%M:%S')
+    current_time_obj = datetime.datetime.now().time()
+    current_time_str = current_time_obj.strftime('%H:%M:%S')
     current_date = datetime.datetime.now().strftime('%d/%m/%Y')
 
-    # 1. Проверяем, есть ли уже запись за сегодня
-    cur.execute("SELECT time_in, time_out FROM attendance WHERE student_id = %s AND date = %s", (student_id, current_date))
-    result = cur.fetchone()
-    if result is None:
-        # Вообще нет строки — создаем новую с временем прихода
-        if current_time < "11:02:00":
-            query = "INSERT INTO attendance (student_id, date, time_in, status) VALUES (%s, %s, %s, 'present')"
-            cur.execute(query, (student_id, current_date, current_time))
-            print(f"Студент {student_id}: НОВАЯ ЗАПИСЬ (Приход в {current_time})")
-        if current_time > "11:05:00":
-            query = "INSERT INTO attendance (student_id, date, time_in, status) VALUES (%s, %s, %s, 'late')"
-            cur.execute(query, (student_id, current_date, current_time))
-            # print(f"Студент {student_id}: НОВАЯ ЗАПИСЬ (Приход в {current_time})")
-    elif result[0] is None:
-        # Строка есть (от старого кода), но время прихода ПУСТОЕ — заполняем приход
-        query = "UPDATE attendance SET time_in = %s WHERE student_id = %s AND date = %s"
-        cur.execute(query, (current_time, student_id, current_date))
-        print(f"Студент {student_id}: ЗАПОЛНЕН ПРИХОД ({current_time})")
-        
-    elif result[1] is None:
-        # Приход уже был, а ухода нет — заполняем уход
-        query = "UPDATE attendance SET time_out = %s WHERE student_id = %s AND date = %s"
-        cur.execute(query, (current_time, student_id, current_date))
-        print(f"Студент {student_id}: ЗАПОЛНЕН УХОД ({current_time})")
+    # Получаем настройки группы для времени
+    cur.execute("""
+        SELECT g.start_time, g.late_threshold 
+        FROM students s
+        JOIN student_groups g ON s.group_id = g.group_id
+        WHERE s.id = %s
+    """, (student_id,))
+    group_settings = cur.fetchone()
     
-    else:
-        # И приход, и уход уже стоят
-        print(f"Студент {student_id}: У этого студента уже заполнены и вход, и выход.")
+    if not group_settings: return
+    start_time, late_threshold = group_settings
+
+    # Проверяем текущий статус (был ли уже приход)
+    cur.execute("SELECT status, time_in, time_out FROM attendance WHERE student_id = %s AND date = %s", (student_id, current_date))
+    result = cur.fetchone()
+
+    # Если статус 'absent' — значит это первое сканирование (ПРИХОД)
+    if result and result[0] == 'absent':
+        if current_time_obj <= start_time:
+            new_status = 'present'
+        else:
+            new_status = 'late'
+
+        query = "UPDATE attendance SET time_in = %s, status = %s WHERE student_id = %s AND date = %s"
+        cur.execute(query, (current_time_str, new_status, student_id, current_date))
+        print(f"Студент {student_id}: статус изменен на {new_status}")
+        
+        # Здесь можно вызвать функцию отправки SMS родителям
+        # send_sms_via_arduino(...) 
+
+    # Если вход уже был, а выхода нет — фиксируем ВЫХОД
+    elif result and result[2] is None:
+        query = "UPDATE attendance SET time_out = %s WHERE student_id = %s AND date = %s"
+        cur.execute(query, (current_time_str, student_id, current_date))
+        print(f"Студент {student_id}: зафиксирован выход")
+
     conn.commit()
+
 
 def create_table(student_id):
     data = datetime.datetime.now().strftime('%d/%m/%Y')
@@ -108,6 +118,36 @@ def students():
         last_id = s_id
         with open("last_id.txt", "w") as f:
             f.write(str(last_id))
+
+def initialize_attendance():
+    current_date = datetime.datetime.now().strftime('%d/%m/%Y')
+    print(f"Инициализация посещаемости на {current_date}...")
+
+    try:
+        # Получаем список всех активных студентов
+        cur.execute("SELECT id FROM students")
+        all_students = cur.fetchall()
+
+        for row in all_students:
+            student_id = row[0]
+            
+            # Пытаемся вставить запись со статусом 'absent'
+            # Если запись уже есть (например, скрипт перезапустили), ON CONFLICT ничего не делает
+            query = """
+            INSERT INTO attendance (student_id, date, status)
+            VALUES (%s, %s, 'absent')
+            ON CONFLICT (student_id, date) DO NOTHING;
+            """
+            cur.execute(query, (student_id, current_date))
+        
+        conn.commit()
+        print("Все студенты отмечены как 'absent'. Ожидание сканирования...")
+    except Exception as e:
+        print(f"Ошибка инициализации: {e}")
+        conn.rollback()
+
+# --- ВЫЗОВ ПЕРЕД ЦИКЛОМ ---
+initialize_attendance()
 
 while True:
     students()
